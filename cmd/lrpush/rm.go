@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/davidliu/lrpush/internal/afcfs"
 	"github.com/davidliu/lrpush/internal/device"
@@ -100,7 +101,8 @@ func newRmCmd() *cobra.Command {
 
 // interactiveSelectTargets shows a multi-select menu of userStyles' first-level
 // entries, then asks for confirmation. It returns the chosen relative paths and
-// ok=true only when the user confirms a non-empty selection.
+// ok=true only when the user confirms a non-empty selection. On a real terminal
+// it uses an arrow-key TUI; otherwise it falls back to a numbered prompt.
 func interactiveSelectTargets(fs afcfs.FS, userStyles string, w io.Writer) ([]string, bool, error) {
 	entries, err := listUserStylesEntries(fs, userStyles)
 	if err != nil {
@@ -110,6 +112,15 @@ func interactiveSelectTargets(fs afcfs.FS, userStyles string, w io.Writer) ([]st
 		fmt.Fprintln(w, "userStyles is empty; nothing to delete")
 		return nil, false, nil
 	}
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		return tuiMultiSelect(entries)
+	}
+	return numberSelectTargets(entries, w)
+}
+
+// numberSelectTargets is the non-TTY fallback: print a numbered list, read a
+// selection line, then a typed "yes" confirmation.
+func numberSelectTargets(entries []entryChoice, w io.Writer) ([]string, bool, error) {
 	fmt.Fprintln(w, "userStyles entries:")
 	for i, e := range entries {
 		kind := "file"
