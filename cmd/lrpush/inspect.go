@@ -33,12 +33,10 @@ func terminalPicker(cands []locate.Catalog) (int, error) {
 }
 
 func newInspectCmd() *cobra.Command {
-	var samples int
-	var sampleDir string
 	var catalog string
 	cmd := &cobra.Command{
 		Use:   "inspect",
-		Short: "Dump the app container tree and locate userStyles",
+		Short: "Locate userStyles and list its first-level contents",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sess, err := device.Connect(flagUDID, flagBundleID)
 			if err != nil {
@@ -48,15 +46,11 @@ func newInspectCmd() *cobra.Command {
 			fmt.Printf("device: %s   bundle: %s\n\n", sess.Label, flagBundleID)
 			return inspect.Run(sess.FS, os.Stdout, inspect.Options{
 				PathPrefix:  flagPathPrefix,
-				Samples:     samples,
-				SampleDir:   sampleDir,
 				CatalogFlag: catalog,
 				Picker:      terminalPicker,
 			})
 		},
 	}
-	cmd.Flags().IntVar(&samples, "sample", 1, "how many existing userStyles files to pull for format inspection")
-	cmd.Flags().StringVar(&sampleDir, "sample-dir", "./_inspect_sample", "local dir for pulled samples")
 	cmd.Flags().StringVar(&catalog, "catalog", "", "select catalog by name (non-interactive)")
 	return cmd
 }

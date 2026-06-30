@@ -70,11 +70,9 @@ CLI 框架：**cobra + 子指令**。
 
 ### `lrpush inspect`
 調查指令，可重複跑，也是 push/rm 在定位 target 時的共用邏輯來源。
-- dump house_arrest AFC root 的目錄樹。
-- 自動偵測 AFC root 是 container 還是 Documents。
-- 在 Documents 下列出所有子資料夾，篩出含 `settings-acr` 子目錄者，依 mtime 列出候選並標明會採用最新的哪一個。
-- pull 一個現有 userStyles 檔到本機（`./_inspect_sample/`）讓使用者確認副檔名/格式。
-- 旗標：`--sample int`（pull 幾個樣本，預設 1）、`--no-sample`。
+- 偵測 AFC root 前綴（見 §6）、列出含 `settings-acr` 的 catalog 候選並選定。
+- 列出選定 `userStyles` 的**第一層**內容（preset 群組資料夾與零散檔），不展開深層、不 pull 任何樣本檔。
+- 旗標：`--catalog`（非互動選 catalog）。
 
 ### `lrpush push`
 主流程，**預設 `--dry-run`**，要 `--commit` 才實際寫入。

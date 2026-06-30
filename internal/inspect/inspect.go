@@ -1,12 +1,10 @@
-// Package inspect dumps the app container tree and locates userStyles, pulling
-// a sample preset so its real extension/format can be confirmed.
+// Package inspect dumps the app container's userStyles location and its
+// first-level contents.
 package inspect
 
 import (
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/davidliu/lrpush/internal/afcfs"
@@ -16,8 +14,6 @@ import (
 // Options configures an inspect run.
 type Options struct {
 	PathPrefix  string
-	Samples     int
-	SampleDir   string
 	CatalogFlag string
 	Picker      func([]locate.Catalog) (int, error)
 }
@@ -89,88 +85,5 @@ func Run(fs afcfs.FS, w io.Writer, opts Options) error {
 		fmt.Fprintln(w, "  "+l)
 	}
 	fmt.Fprintln(w)
-
-	if opts.Samples > 0 {
-		candidates := sampleCandidates(fs, chosen.UserStyles, opts.Samples)
-		if len(candidates) == 0 {
-			fmt.Fprintln(w, "no existing preset files to sample in userStyles")
-			return nil
-		}
-		if err := os.MkdirAll(opts.SampleDir, 0o755); err != nil {
-			fmt.Fprintf(w, "could not create sample dir %s: %v\n", opts.SampleDir, err)
-			return nil
-		}
-		for _, src := range candidates {
-			dst := filepath.Join(opts.SampleDir, baseName(src))
-			if err := fs.Pull(src, dst); err != nil {
-				fmt.Fprintf(w, "sample pull failed %s: %v\n", src, err)
-				continue
-			}
-			fmt.Fprintf(w, "pulled sample: %s -> %s\n", src, dst)
-		}
-	}
 	return nil
-}
-
-// indexFileName is Lightroom's binary preset index; it is not a representative
-// preset, so sampling skips it.
-const indexFileName = "Index.dat"
-
-func baseName(devicePath string) string {
-	if i := strings.LastIndex(devicePath, "/"); i >= 0 {
-		return devicePath[i+1:]
-	}
-	return devicePath
-}
-
-// sampleCandidates returns up to max device file paths under userStyles suitable
-// as format samples. Real presets live inside per-group subfolders, so it
-// prefers files one level down, then falls back to top-level files, always
-// skipping Index.dat.
-func sampleCandidates(fs afcfs.FS, userStyles string, max int) []string {
-	entries, err := fs.List(userStyles)
-	if err != nil {
-		return nil
-	}
-	var files []string
-	// Pass 1: files inside subfolders (the actual presets).
-	for _, name := range entries {
-		if len(files) >= max {
-			return files
-		}
-		child := userStyles + "/" + name
-		fi, err := fs.Stat(child)
-		if err != nil || !fi.IsDir {
-			continue
-		}
-		sub, err := fs.List(child)
-		if err != nil {
-			continue
-		}
-		for _, sn := range sub {
-			if len(files) >= max {
-				break
-			}
-			sc := child + "/" + sn
-			if sfi, err := fs.Stat(sc); err != nil || sfi.IsDir {
-				continue
-			}
-			files = append(files, sc)
-		}
-	}
-	// Pass 2: top-level files (except Index.dat) if more are still needed.
-	for _, name := range entries {
-		if len(files) >= max {
-			break
-		}
-		if name == indexFileName {
-			continue
-		}
-		child := userStyles + "/" + name
-		if fi, err := fs.Stat(child); err != nil || fi.IsDir {
-			continue
-		}
-		files = append(files, child)
-	}
-	return files
 }

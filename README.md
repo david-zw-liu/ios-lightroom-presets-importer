@@ -41,9 +41,8 @@ Other targets: `make test`, `make vet`, `make fmt`, `make clean`.
 
     ./lrpush inspect
 
-Dumps the container tree, lists catalogs containing `settings-acr`, selects the
-userStyles target, and pulls one existing preset into `./_inspect_sample/` so
-you can confirm the real file extension/format.
+Lists catalogs containing `settings-acr`, selects the userStyles target, and
+lists `userStyles`' first-level contents (its preset groups and loose files).
 
 ### 2. Push (dry-run, then commit)
 
