@@ -41,7 +41,9 @@ go-ios v1.2.0（`go get @latest` 取得）的 `afc.FileInfo` 只有 `Name / Type
 4. **userStyles 不是平的**：底下是**多個 preset 群組子資料夾**（如 `C4-英泽君经典富士Vivid250D/`，共 13 個），每個資料夾內是一堆 `.xmp`。→ 證實「保留來源資料夾層級」的設計正確。
 5. **preset 檔是標準 Adobe XMP**（`.xmp`、純文字，每檔含 `crs:PresetType` / `crs:UUID` / `crs:Cluster`）。
 6. **⚠️ userStyles 根有一個 `Index.dat`（約 505 KB，二進位）**：版本(4B) + 數量(4B) + 重複 [長度(4B)][路徑字串] 結構，列出所有 preset 的相對路徑（含內建 `AppBundle-FolderPlaceHolder/Adobe/Presets/...`）。
-   → **關鍵風險：Lightroom 很可能讀 Index.dat 來決定有哪些 preset。** 只丟新 `.xmp` 資料夾、不動 Index.dat，presets 可能不會出現。可能策略：(a) push 後**刪掉 Index.dat** 逼 Lightroom 重建（待實測）；(b) 解析並改寫 Index.dat（最穩、工最多）；(c) 只 push、實測 Lightroom 是否會自動掃描重建。**此點需實測決定，影響 push 設計（§5）。**
+   Index.dat 經確認**含使用者自己的 preset**（"英泽君"×842、"Vivid250D"×84、"C4-"×44，每筆有 LookName/LookUUID/PresetName/PresetType/SortName/Supports 等 metadata），不只內建。
+
+   **決策（使用者拍板）：採方案 B —— push 只丟檔案、不動 Index.dat，由 Lightroom 自己重建。** 因此 push 設計（§5）維持原樣，不做 Index.dat 解析或刪除。實際是否成功重建，於第一次實機 push 測試時驗證；若 Lightroom 未自動重建，再回頭評估刪除/改寫 Index.dat。
 
 ## 3. 架構
 
