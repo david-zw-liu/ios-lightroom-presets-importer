@@ -19,16 +19,24 @@ func join(parts ...string) string {
 }
 
 // DocumentsRoot determines the path prefix that contains the catalog folders.
-// override wins. Otherwise: if the AFC root contains a "Documents" dir, the root
-// is the container and we return "Documents"; else the root already is Documents
-// and we return "".
+// override wins. Otherwise we probe for a listable "Documents" dir and return
+// "Documents" if found; this works even on house_arrest VendDocuments transports
+// where the AFC root itself is not listable (List("") returns afc error 10). If
+// "Documents" is not listable, we fall back to listing the root for a Documents
+// child, and finally assume the root already is Documents (return "").
 func DocumentsRoot(fs afcfs.FS, override string) (string, error) {
 	if override != "" {
 		return strings.Trim(override, "/"), nil
 	}
+	// Preferred probe: the root may be unlistable, but a named child is not.
+	if _, err := fs.List("Documents"); err == nil {
+		return "Documents", nil
+	}
+	// Fall back to listing the root (some transports allow it).
 	entries, err := fs.List("")
 	if err != nil {
-		return "", fmt.Errorf("list AFC root: %w", err)
+		// Root not listable and no Documents dir: assume the root is Documents.
+		return "", nil
 	}
 	for _, e := range entries {
 		if e == "Documents" {

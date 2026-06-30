@@ -1,10 +1,35 @@
 package locate
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/davidliu/lrpush/internal/afcfs"
 )
+
+// rootUnlistableFS wraps a MemFS but fails List("") the way a house_arrest
+// VendDocuments transport does (afc error 10), while named children list fine.
+type rootUnlistableFS struct{ *afcfs.MemFS }
+
+func (f rootUnlistableFS) List(p string) ([]string, error) {
+	if p == "" || p == "/" || p == "." {
+		return nil, fmt.Errorf("afc error code: 10")
+	}
+	return f.MemFS.List(p)
+}
+
+func TestDocumentsRootWhenRootUnlistable(t *testing.T) {
+	m := afcfs.NewMemFS()
+	m.AddDir("Documents/123/settings-acr")
+	fs := rootUnlistableFS{m}
+	got, err := DocumentsRoot(fs, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "Documents" {
+		t.Fatalf("DocumentsRoot = %q, want Documents (probe should not rely on List(\"\"))", got)
+	}
+}
 
 func TestDocumentsRootContainer(t *testing.T) {
 	m := afcfs.NewMemFS()
