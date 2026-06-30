@@ -7,3 +7,6 @@
 
 # SDD controller scratch (ledger, briefs, review packages)
 /.superpowers/
+
+# macOS
+.DS_Store
