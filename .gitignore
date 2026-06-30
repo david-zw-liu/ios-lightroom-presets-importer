@@ -7,3 +7,6 @@
 
 # built binary
 /lrpush
+
+# SDD controller scratch (ledger, briefs, review packages)
+/.superpowers/
