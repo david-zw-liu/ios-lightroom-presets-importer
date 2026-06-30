@@ -68,6 +68,12 @@ CLI 框架：**cobra + 子指令**。
 - `--bundle-id string`：預設 `com.adobe.lrmobile`。
 - `--path-prefix string`：覆寫 AFC root 前綴（自動偵測失敗時用）。
 
+### bundle id 自動偵測（實機發現）
+
+Lightroom mobile 的 bundle id **依裝置不同**：**iPhone = `com.adobe.lrmobilephone`**、**iPad/通用 = `com.adobe.lrmobile`**（實機 installationproxy 確認，iPhone16,1 / iOS 27 用前者）。錯 id 會回 `ApplicationLookupFailed`。
+
+→ `--bundle-id` 未明指時，`device.Connect` 依序試 `["com.adobe.lrmobile", "com.adobe.lrmobilephone"]`，第一個 vend 成功者採用；`Session.BundleID` 記錄實際連上的 id。明指 `--bundle-id` 則只試該一個。
+
 ### `lrpush devices`
 列出所有連接的 USB 裝置（依 udid 去重，usbmuxd 可能同一台報多個 transport），每台印 udid、名稱、機型、iOS 版本；lockdown 讀值失敗（如裝置鎖定）則印錯誤但不漏列。用來在多裝置時挑 `--udid`。
 

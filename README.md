@@ -96,10 +96,14 @@ then back up + delete — no `--commit` needed, the confirmation is the gate):
 which is non-deterministic when several are attached. Run `lrpush devices` to
 list udids, then pass `--udid <udid>` to target a specific one.
 
-**`InstallationLookupFailed` / lockdown errors:** make sure the device is
-unlocked and trusted (accept the "Trust This Computer" prompt). `lrpush` opens
-the app's documents container via house_arrest `VendDocuments` (falling back to
-`VendContainer`), so the target app must be installed and expose file sharing.
+**`InstallationLookupFailed` / `ApplicationLookupFailed` / lockdown errors:**
+make sure the device is unlocked and trusted (accept the "Trust This Computer"
+prompt). `lrpush` opens the app's documents container via house_arrest
+`VendDocuments` (falling back to `VendContainer`), so the target app must be
+installed and expose file sharing. Lightroom's bundle id differs by device
+(**iPhone: `com.adobe.lrmobilephone`**, **iPad/universal: `com.adobe.lrmobile`**) —
+when `--bundle-id` is not set, `lrpush` auto-tries both. If your app uses yet
+another id, pass it with `--bundle-id`.
 
 **Pushed presets don't appear in Lightroom:** fully close Lightroom (swipe it
 away) before pushing and reopen it after, so it re-reads its preset index.
@@ -108,7 +112,8 @@ Presets pushed this way may not sync to Creative Cloud.
 ## Flags
 
 - `--udid` — target device (default: first USB device)
-- `--bundle-id` — default `com.adobe.lrmobile`
+- `--bundle-id` — app bundle id; if unset, auto-tries `com.adobe.lrmobile`
+  (iPad) and `com.adobe.lrmobilephone` (iPhone)
 - `--path-prefix` — override AFC root prefix if auto-detection is wrong
 - `--catalog` — pick catalog by name (non-interactive; otherwise a menu appears
   when multiple catalogs exist)
