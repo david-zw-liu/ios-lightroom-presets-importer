@@ -63,16 +63,6 @@ func Run(fs afcfs.FS, w io.Writer, opts Options) error {
 	}
 	fmt.Fprintf(w, "AFC root prefix (Documents): %q\n\n", docsRoot)
 
-	fmt.Fprintln(w, "Directory tree:")
-	lines, err := TreeLines(fs, docsRoot, 6)
-	if err != nil {
-		return err
-	}
-	for _, l := range lines {
-		fmt.Fprintln(w, "  "+l)
-	}
-	fmt.Fprintln(w)
-
 	cands, err := locate.FindCatalogs(fs, docsRoot)
 	if err != nil {
 		return err
@@ -88,6 +78,17 @@ func Run(fs afcfs.FS, w io.Writer, opts Options) error {
 		return err
 	}
 	fmt.Fprintf(w, "Selected catalog: %s\n  target userStyles: %s\n\n", chosen.Name, chosen.UserStyles)
+
+	// List only the first level of userStyles (its groups + loose files).
+	fmt.Fprintln(w, "userStyles contents:")
+	lines, err := TreeLines(fs, chosen.UserStyles, 0)
+	if err != nil {
+		return err
+	}
+	for _, l := range lines {
+		fmt.Fprintln(w, "  "+l)
+	}
+	fmt.Fprintln(w)
 
 	if opts.Samples > 0 {
 		candidates := sampleCandidates(fs, chosen.UserStyles, opts.Samples)
