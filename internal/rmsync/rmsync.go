@@ -4,6 +4,7 @@ package rmsync
 import (
 	"fmt"
 	"io"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -26,12 +27,31 @@ type Target struct {
 	Device string
 	Exists bool
 	IsDir  bool
+	Unsafe bool // true when rel fails the path-containment check
+}
+
+// isUnsafePath reports whether rel must be rejected.
+// A rel is unsafe if it is empty, absolute (starts with "/"), or — after
+// path.Clean — equals "." or ".." or starts with "../".
+func isUnsafePath(rel string) bool {
+	if rel == "" {
+		return true
+	}
+	if strings.HasPrefix(rel, "/") {
+		return true
+	}
+	cleaned := path.Clean(rel)
+	return cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../")
 }
 
 // PlanRm resolves relative paths under userStylesDir and stats each.
 func PlanRm(fs afcfs.FS, userStylesDir string, rels []string) []Target {
 	var out []Target
 	for _, rel := range rels {
+		if isUnsafePath(rel) {
+			out = append(out, Target{Rel: rel, Unsafe: true})
+			continue
+		}
 		dev := deviceJoin(userStylesDir, rel)
 		t := Target{Rel: rel, Device: dev}
 		if fi, err := fs.Stat(dev); err == nil {
@@ -56,6 +76,10 @@ func Execute(fs afcfs.FS, targets []Target, opts ExecOptions) error {
 	if !opts.Commit {
 		fmt.Fprintln(w, "DRY RUN (no changes will be made). Pass --commit to apply.")
 		for _, t := range targets {
+			if t.Unsafe {
+				fmt.Fprintf(w, "refused (path escapes userStyles; must be a relative path with no \"..\"): %s\n", t.Rel)
+				continue
+			}
 			if !t.Exists {
 				fmt.Fprintf(w, "skip (not found): %s\n", t.Device)
 				continue
@@ -71,6 +95,11 @@ func Execute(fs afcfs.FS, targets []Target, opts ExecOptions) error {
 
 	var failures int
 	for _, t := range targets {
+		if t.Unsafe {
+			fmt.Fprintf(w, "refused (path escapes userStyles; must be a relative path with no \"..\"): %s\n", t.Rel)
+			failures++
+			continue
+		}
 		if !t.Exists {
 			fmt.Fprintf(w, "skip (not found): %s\n", t.Device)
 			continue
