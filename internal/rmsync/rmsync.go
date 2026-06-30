@@ -4,6 +4,7 @@ package rmsync
 import (
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 
 	"github.com/davidliu/lrpush/internal/afcfs"
@@ -74,7 +75,7 @@ func Execute(fs afcfs.FS, targets []Target, opts ExecOptions) error {
 			fmt.Fprintf(w, "skip (not found): %s\n", t.Device)
 			continue
 		}
-		backupPath := deviceJoin(opts.BackupDir, t.Rel)
+		backupPath := filepath.Join(opts.BackupDir, t.Rel)
 		if err := fs.Pull(t.Device, backupPath); err != nil {
 			fmt.Fprintf(w, "FAIL backup %s: %v\n", t.Device, err)
 			failures++
