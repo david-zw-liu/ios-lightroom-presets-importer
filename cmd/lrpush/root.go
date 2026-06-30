@@ -21,7 +21,7 @@ func init() {
 	pf.StringVar(&flagBundleID, "bundle-id", "com.adobe.lrmobile", "app bundle id")
 	pf.StringVar(&flagPathPrefix, "path-prefix", "", "override AFC root prefix (e.g. Documents)")
 
-	rootCmd.AddCommand(newInspectCmd(), newPushCmd(), newRmCmd())
+	rootCmd.AddCommand(newDevicesCmd(), newInspectCmd(), newPushCmd(), newRmCmd())
 }
 
 func Execute() error { return rootCmd.Execute() }

@@ -37,6 +37,45 @@ func DescribeDevice(d ios.DeviceEntry) string {
 	return d.Properties.SerialNumber
 }
 
+// Info describes one connected device for the `devices` listing.
+type Info struct {
+	UDID        string
+	Name        string
+	ProductType string
+	Version     string
+	Err         string // lockdown error (e.g. device locked), if reading values failed
+}
+
+// List returns the connected USB devices, de-duplicated by udid (usbmuxd may
+// report the same device over more than one transport). For each it tries a
+// lockdown read for name/product/version; a failure is recorded in Err rather
+// than dropping the device.
+func List() ([]Info, error) {
+	list, err := ios.ListDevices()
+	if err != nil {
+		return nil, fmt.Errorf("list devices: %w", err)
+	}
+	seen := make(map[string]bool)
+	var out []Info
+	for _, d := range list.DeviceList {
+		udid := d.Properties.SerialNumber
+		if seen[udid] {
+			continue
+		}
+		seen[udid] = true
+		info := Info{UDID: udid}
+		if vals, err := ios.GetValues(d); err != nil {
+			info.Err = err.Error()
+		} else {
+			info.Name = vals.Value.DeviceName
+			info.ProductType = vals.Value.ProductType
+			info.Version = vals.Value.ProductVersion
+		}
+		out = append(out, info)
+	}
+	return out, nil
+}
+
 // Connect resolves the target device (empty udid -> first device) and opens a
 // house_arrest AFC client for bundleID.
 func Connect(udid, bundleID string) (*Session, error) {
