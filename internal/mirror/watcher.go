@@ -22,6 +22,7 @@ type Watcher struct {
 	deviceUserStyles string
 	log              func(string)
 	w                *fsnotify.Watcher
+	known            map[string]fileSig
 }
 
 func NewWatcher(fs afcfs.FS, localDir, deviceUserStyles string, log func(string)) (*Watcher, error) {
@@ -69,6 +70,13 @@ func statDir(p string) (bool, error) {
 // Run watches localDir recursively and pushes debounced batches of changes to
 // the device via Reconcile until ctx is cancelled.
 func (w *Watcher) Run(ctx context.Context) error {
+	known, err := snapshot(w.localDir)
+	if err != nil {
+		w.w.Close()
+		return err
+	}
+	w.known = known
+
 	dirs, err := subdirs(w.localDir)
 	if err != nil {
 		w.w.Close()
@@ -93,7 +101,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 			changed = append(changed, r)
 		}
 		pending = map[string]struct{}{}
-		if err := Reconcile(w.fs, w.localDir, w.deviceUserStyles, changed, w.log); err != nil {
+		if err := Reconcile(w.fs, w.localDir, w.deviceUserStyles, changed, w.known, w.log); err != nil {
 			w.log("reconcile error: " + err.Error())
 		}
 	}

@@ -100,7 +100,14 @@ func (m *MemFS) Stat(p string) (FileInfo, error) {
 	return FileInfo{}, fmt.Errorf("no such path: %s", p)
 }
 
-func (m *MemFS) MkDir(p string) error { m.AddDir(p); return nil }
+func (m *MemFS) MkDir(p string) error {
+	c := clean(p)
+	if _, ok := m.files[c]; ok {
+		return fmt.Errorf("mkdir %s: a file exists at path", c)
+	}
+	m.AddDir(p)
+	return nil
+}
 
 func (m *MemFS) RemoveAll(p string) error {
 	p = clean(p)
@@ -125,8 +132,12 @@ func (m *MemFS) Pull(src, dst string) error {
 }
 
 func (m *MemFS) PushFile(localSrc, deviceDst string) error {
+	c := clean(deviceDst)
+	if m.dirs[c] {
+		return fmt.Errorf("push %s: a directory exists at path", c)
+	}
 	m.AddFile(deviceDst, 0)
-	m.Pushed[clean(deviceDst)] = localSrc
+	m.Pushed[c] = localSrc
 	return nil
 }
 

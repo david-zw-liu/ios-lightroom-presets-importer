@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/davidliu/lrpush/internal/afcfs"
 )
@@ -30,7 +31,7 @@ func TestReconcilePushesNewFile(t *testing.T) {
 	writeLocal(t, local, "A/foo.xmp", "hi")
 	root := "Documents/cat/settings-acr/userStyles"
 
-	if err := Reconcile(fs, local, root, []string{"A/foo.xmp"}, func(string) {}); err != nil {
+	if err := Reconcile(fs, local, root, []string{"A/foo.xmp"}, map[string]fileSig{}, func(string) {}); err != nil {
 		t.Fatal(err)
 	}
 	if !fs.Has(root + "/A/foo.xmp") {
@@ -45,7 +46,7 @@ func TestReconcilePushesNewDirRecursively(t *testing.T) {
 	writeLocal(t, local, "Grp/sub/two.xmp", "b")
 	root := "Documents/cat/settings-acr/userStyles"
 
-	if err := Reconcile(fs, local, root, []string{"Grp"}, func(string) {}); err != nil {
+	if err := Reconcile(fs, local, root, []string{"Grp"}, map[string]fileSig{}, func(string) {}); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range []string{root + "/Grp/one.xmp", root + "/Grp/sub/two.xmp"} {
@@ -61,7 +62,7 @@ func TestReconcileDeletesMissingLocalPath(t *testing.T) {
 	fs.AddFile(root+"/Old/gone.xmp", 5)
 	local := t.TempDir() // Old/ does not exist locally
 
-	if err := Reconcile(fs, local, root, []string{"Old"}, func(string) {}); err != nil {
+	if err := Reconcile(fs, local, root, []string{"Old"}, map[string]fileSig{}, func(string) {}); err != nil {
 		t.Fatal(err)
 	}
 	if fs.Has(root+"/Old") || fs.Has(root+"/Old/gone.xmp") {
@@ -76,7 +77,7 @@ func TestReconcileSkipsEscapePath(t *testing.T) {
 	local := t.TempDir()
 
 	var logged []string
-	if err := Reconcile(fs, local, root, []string{"../evil"}, func(s string) { logged = append(logged, s) }); err != nil {
+	if err := Reconcile(fs, local, root, []string{"../evil"}, map[string]fileSig{}, func(s string) { logged = append(logged, s) }); err != nil {
 		t.Fatal(err)
 	}
 	if !fs.Has(root + "/keep.xmp") {
@@ -133,5 +134,115 @@ func TestPullReplaceMirrorsTreeAndCreatesLocalDirs(t *testing.T) {
 	}
 	if len(logged) != 3 {
 		t.Errorf("expected 3 per-file log lines, got %d: %v", len(logged), logged)
+	}
+}
+
+func TestReconcileSuppressesEcho(t *testing.T) {
+	fs := afcfs.NewMemFS()
+	root := "Documents/cat/settings-acr/userStyles"
+	local := t.TempDir()
+	writeLocal(t, local, "A/foo.xmp", "hello")
+	known, err := snapshot(local) // baseline captured right after the "pull"
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A macOS echo event fires for the unchanged, just-pulled file.
+	if err := Reconcile(fs, local, root, []string{"A/foo.xmp"}, known, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	if fs.Has(root + "/A/foo.xmp") {
+		t.Error("unchanged file must NOT be pushed (echo suppressed)")
+	}
+}
+
+func TestReconcilePushesFileChangedBySize(t *testing.T) {
+	fs := afcfs.NewMemFS()
+	root := "Documents/cat/settings-acr/userStyles"
+	local := t.TempDir()
+	writeLocal(t, local, "A/foo.xmp", "hello")
+	known, _ := snapshot(local)
+	writeLocal(t, local, "A/foo.xmp", "hello, longer content now") // size changes
+	if err := Reconcile(fs, local, root, []string{"A/foo.xmp"}, known, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	if !fs.Has(root + "/A/foo.xmp") {
+		t.Error("size-changed file must be pushed")
+	}
+}
+
+func TestReconcilePushesFileChangedByMtimeSameSize(t *testing.T) {
+	fs := afcfs.NewMemFS()
+	root := "Documents/cat/settings-acr/userStyles"
+	local := t.TempDir()
+	writeLocal(t, local, "A/foo.xmp", "12345")
+	known, _ := snapshot(local)
+	// Same byte length, but a real edit bumps mtime (simulate deterministically).
+	writeLocal(t, local, "A/foo.xmp", "67890")
+	future := time.Unix(0, 0).Add(1000000 * time.Hour)
+	if err := os.Chtimes(filepath.Join(local, "A", "foo.xmp"), future, future); err != nil {
+		t.Fatal(err)
+	}
+	if err := Reconcile(fs, local, root, []string{"A/foo.xmp"}, known, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	if !fs.Has(root + "/A/foo.xmp") {
+		t.Error("same-size but mtime-changed file must be pushed")
+	}
+}
+
+func TestReconcileSkipsDSStore(t *testing.T) {
+	fs := afcfs.NewMemFS()
+	root := "Documents/cat/settings-acr/userStyles"
+	local := t.TempDir()
+	writeLocal(t, local, ".DS_Store", "junk")
+	writeLocal(t, local, "A/.DS_Store", "junk")
+	writeLocal(t, local, "A/foo.xmp", "real")
+	if err := Reconcile(fs, local, root, []string{".DS_Store", "A"}, map[string]fileSig{}, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	if fs.Has(root + "/.DS_Store") {
+		t.Error("top-level .DS_Store must not be pushed")
+	}
+	if fs.Has(root + "/A/.DS_Store") {
+		t.Error("nested .DS_Store must not be pushed")
+	}
+	if !fs.Has(root + "/A/foo.xmp") {
+		t.Error("real file under A should still push")
+	}
+}
+
+func TestReconcileReplacesDeviceFileWithDir(t *testing.T) {
+	fs := afcfs.NewMemFS()
+	root := "Documents/cat/settings-acr/userStyles"
+	fs.AddFile(root+"/Portrait", 10) // device has a loose FILE named Portrait
+	local := t.TempDir()
+	writeLocal(t, local, "Portrait/one.xmp", "a") // local now a DIR
+	if err := Reconcile(fs, local, root, []string{"Portrait"}, map[string]fileSig{}, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := fs.Stat(root + "/Portrait")
+	if err != nil || !fi.IsDir {
+		t.Error("Portrait should be a directory on the device now")
+	}
+	if !fs.Has(root + "/Portrait/one.xmp") {
+		t.Error("new dir contents must be pushed")
+	}
+}
+
+func TestReconcileReplacesDeviceDirWithFile(t *testing.T) {
+	fs := afcfs.NewMemFS()
+	root := "Documents/cat/settings-acr/userStyles"
+	fs.AddFile(root+"/Group/old.xmp", 5) // device has a DIR named Group
+	local := t.TempDir()
+	writeLocal(t, local, "Group", "now a plain file") // local now a FILE
+	if err := Reconcile(fs, local, root, []string{"Group"}, map[string]fileSig{}, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := fs.Stat(root + "/Group")
+	if err != nil || fi.IsDir {
+		t.Error("Group should be a file on the device now")
+	}
+	if fs.Has(root + "/Group/old.xmp") {
+		t.Error("stale dir contents must be gone")
 	}
 }
