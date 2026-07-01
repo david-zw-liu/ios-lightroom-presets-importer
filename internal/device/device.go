@@ -119,6 +119,50 @@ func openHouseArrest(device ios.DeviceEntry, bundleID string) (*afc.Client, erro
 	return nil, fmt.Errorf("house_arrest vend for %s failed: %w", bundleID, lastErr)
 }
 
+// collectVendable probes each bundle id in order and returns a Session for
+// every one that vends successfully. It errors only if none vend.
+func collectVendable(bundleIDs []string, probe func(string) (*Session, error)) ([]*Session, error) {
+	var out []*Session
+	var lastErr error
+	for _, id := range bundleIDs {
+		s, err := probe(id)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		out = append(out, s)
+	}
+	if len(out) == 0 {
+		if lastErr != nil {
+			return nil, fmt.Errorf("no Lightroom app vends on this device: %w", lastErr)
+		}
+		return nil, fmt.Errorf("no Lightroom app found on this device")
+	}
+	return out, nil
+}
+
+// DetectSessions resolves the device and opens a house_arrest AFC session for
+// every installed Lightroom app (each bundle id that vends). At least one must
+// vend or it returns an error. Callers own Close() on every returned session.
+func DetectSessions(udid string, bundleIDs []string) ([]*Session, error) {
+	d, err := ios.GetDevice(udid)
+	if err != nil {
+		return nil, fmt.Errorf("resolve device: %w", err)
+	}
+	return collectVendable(bundleIDs, func(id string) (*Session, error) {
+		client, err := openHouseArrest(d, id)
+		if err != nil {
+			return nil, err
+		}
+		return &Session{
+			FS:       afcfs.Wrap(client),
+			Label:    DescribeDevice(d),
+			BundleID: id,
+			closer:   client.Close,
+		}, nil
+	})
+}
+
 // vend issues a single house_arrest vend command on a fresh service connection.
 // On success the connection is owned by the returned afc.Client; on failure it
 // is closed before returning.
