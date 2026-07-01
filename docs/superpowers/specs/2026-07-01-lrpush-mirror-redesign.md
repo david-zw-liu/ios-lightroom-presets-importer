@@ -46,11 +46,19 @@ interactive picker.
 - >1 → arrow-key picker (huh) listing name / model / udid.
 
 ### 2. Lightroom app detection (no bundle picker)
-For the chosen device, enumerate installed apps via `installationproxy` and
-intersect with the known Lightroom bundle ids, probed in this precedence order:
+For the chosen device, detect the installed Lightroom apps by **attempting a
+house_arrest `VendDocuments` vend** on each known bundle id, in this precedence
+order:
 
 1. `com.adobe.lrmobilephone` (iPhone)
 2. `com.adobe.lrmobile` (iPad / universal)
+
+A bundle id that vends successfully is installed and file-sharing-enabled — it
+is a mirror target. This reuses the exact code path `device.Connect` already
+uses (validated on-device), so detection cannot disagree with what a later
+connect would do, and no separate `installationproxy` call is introduced. A
+successful probe's open AFC session is kept and reused for that app (no second
+vend).
 
 - 0 installed → error and exit ("Lightroom not found on this device").
 - ≥1 installed → **mirror every one of them.** Each installed app becomes an
@@ -63,9 +71,10 @@ In the common case exactly one Lightroom app is installed, so this degenerates
 to a single session.
 
 ### 3. Per-app setup
-For each installed Lightroom app:
+For each installed Lightroom app (reusing the AFC session opened during
+detection in step 2):
 
-1. Connect house_arrest (`VendDocuments`, existing logic) to that bundle id.
+1. Use the app's already-open house_arrest AFC session.
 2. Locate the userStyles target: `locate.DocumentsRoot` → `locate.FindCatalogs`
    → `locate.SelectCatalog`.
    - 1 catalog → auto-select.
@@ -91,6 +100,13 @@ Before starting the watchers, print the existing "fully close Lightroom now,
 reopen when you're done so it rebuilds its preset index" banner a single time.
 No per-change backups.
 
+Then, for each app, print the **absolute** path of its watched folder so the
+user knows exactly where to edit, e.g.:
+
+```
+editing → /Users/.../sync/com.adobe.lrmobile/userStyles  (watching for changes; Ctrl-C to stop)
+```
+
 ### 6. Watch (local → device)
 For each app, a recursive fsnotify watcher over its local `userStyles` tree:
 
@@ -110,9 +126,14 @@ For each app, a recursive fsnotify watcher over its local `userStyles` tree:
 fsnotify stays at the edge (collect paths + debounce only). The device-mutating
 logic lives entirely in `Reconcile`, which is unit-testable without fsnotify.
 
+When more than one app is mirrored concurrently, every log line is prefixed with
+the app's bundle id (e.g. `[com.adobe.lrmobile] pushed A/foo.xmp`) so the
+interleaved output of the concurrent watchers stays readable.
+
 ### 7. Shutdown
-Run until Ctrl-C (SIGINT). On signal, stop all watchers and close all AFC
-sessions cleanly. `./sync/` is **not** deleted on exit — it is left on disk and
+Run until Ctrl-C (SIGINT). On signal, stop all watchers, close all AFC sessions
+cleanly, and print a closing reminder to reopen Lightroom so it rebuilds its
+preset index. `./sync/` is **not** deleted on exit — it is left on disk and
 wiped at the start of the next run (step 4), so no exit-time cleanup or
 signal-handler teardown of the local tree is needed.
 
@@ -131,7 +152,8 @@ signal-handler teardown of the local tree is needed.
 **Keep**
 - `internal/afcfs` (+ `MemFS`) — AFC filesystem boundary and in-memory fake.
 - `internal/device` — `List`, `Connect`, `DescribeDevice`; **add** installed-app
-  detection (installationproxy intersect with the Lightroom bundle ids).
+  detection by probing `VendDocuments` on each Lightroom bundle id and returning
+  the sessions that vend successfully (no `installationproxy`).
 - `internal/locate` — DocumentsRoot / FindCatalogs / SelectCatalog.
 
 **New**
@@ -172,8 +194,9 @@ run, but a crash could leave it behind).
 - `Reconcile`: `MemFS` device + temp local; table-driven cases for create,
   modify, delete, new nested dir, rename (delete+create), and a
   path-containment-escape attempt (must be refused).
-- Device app detection: unit-test the intersection/precedence logic against a
-  fake installed-apps list.
+- Device app detection: unit-test the precedence/collection logic (which bundle
+  ids become mirror targets) against a fake vend-probe that reports success or
+  failure per bundle id.
 - fsnotify itself is not unit-tested; the reconcile logic is exercised directly.
 
 ## Rationale for the removed subcommands
