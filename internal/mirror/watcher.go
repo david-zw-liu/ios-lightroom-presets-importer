@@ -71,10 +71,12 @@ func statDir(p string) (bool, error) {
 func (w *Watcher) Run(ctx context.Context) error {
 	dirs, err := subdirs(w.localDir)
 	if err != nil {
+		w.w.Close()
 		return err
 	}
 	for _, d := range dirs {
 		if err := w.w.Add(d); err != nil {
+			w.w.Close()
 			return err
 		}
 	}
@@ -99,6 +101,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
+			flush()
 			return w.w.Close()
 		case ev, ok := <-w.w.Events:
 			if !ok {
