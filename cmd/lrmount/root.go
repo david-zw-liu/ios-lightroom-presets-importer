@@ -64,6 +64,15 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
+	// One random scratch dir per run holds every device's mountpoint, so
+	// concurrent or crashed runs never share a directory. It is removed on
+	// exit (empty by then, once each volume's mountpoint has been cleaned).
+	base, err := os.MkdirTemp(os.TempDir(), "lrmount-*")
+	if err != nil {
+		return fmt.Errorf("create scratch dir: %w", err)
+	}
+	defer os.Remove(base)
+
 	fmt.Print(warningBanner())
 	fmt.Println("Mounting every USB-connected device (Wi-Fi devices are ignored).")
 	fmt.Println("Eject a device in Finder to unmount just that one; lrmount quits when the last")
@@ -101,7 +110,7 @@ func run() error {
 				fmt.Println("\nDone. Reopen Lightroom so it rebuilds its preset index.")
 				return nil
 			}
-			reconcileNew(mounts, warned, present)
+			reconcileNew(mounts, warned, present, base)
 		}
 	}
 }
@@ -154,7 +163,7 @@ func reconcileEjected(mounts map[string]*deviceMount) bool {
 
 // reconcileNew mounts any USB device not already tracked. Detection failures
 // (device locked/settling, no Lightroom) are logged once and retried.
-func reconcileNew(mounts map[string]*deviceMount, warned map[string]bool, present map[string]device.Info) {
+func reconcileNew(mounts map[string]*deviceMount, warned map[string]bool, present map[string]device.Info, base string) {
 	for udid, info := range present {
 		if _, ok := mounts[udid]; ok {
 			continue
@@ -171,7 +180,7 @@ func reconcileNew(mounts map[string]*deviceMount, warned map[string]bool, presen
 			}
 			continue
 		}
-		mounted := mountDevice(sessions, name)
+		mounted := mountDevice(sessions, name, base)
 		if len(mounted) == 0 {
 			closeSessions(sessions)
 			if !warned[udid] {
@@ -208,10 +217,8 @@ func shutdownAll(mounts map[string]*deviceMount) {
 		}
 		closeSessions(dm.sessions)
 	}
-	// Each volume's mountpoint dir was removed as it was torn down; drop the
-	// now-empty parent scratch dir too. Best effort: it stays if a leftover
-	// orphan mount (e.g. from a kill -9) is still using it.
-	_ = os.Remove(mountBase())
+	// The per-run scratch dir is removed by run's deferred os.Remove once
+	// every mountpoint under it has been cleaned.
 }
 
 // catRef locates one catalog's userStyles so its mounted path can be printed
@@ -227,7 +234,7 @@ type catRef struct {
 // ~/lrmount/<device>, so Finder shows "<device>" containing "<app>/…". It
 // returns a single-element slice (or nil if nothing mounted); the plural
 // shape keeps the supervise loop uniform.
-func mountDevice(sessions []*device.Session, deviceName string) []*volume {
+func mountDevice(sessions []*device.Session, deviceName, base string) []*volume {
 	var entries []afcfs.NamedFS
 	var refs []catRef
 	for _, s := range sessions {
@@ -261,7 +268,7 @@ func mountDevice(sessions []*device.Session, deviceName string) []*volume {
 	}()
 
 	port := ln.Addr().(*net.TCPAddr).Port
-	mp, err := mountAt(deviceName, port)
+	mp, err := mountAt(deviceName, port, base)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		ln.Close()

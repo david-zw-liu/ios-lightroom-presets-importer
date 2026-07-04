@@ -39,20 +39,11 @@ func hintPath(mountpoint, app, root, devicePath string) string {
 	return filepath.Join(mountpoint, app, rel)
 }
 
-// mountBase is where volumes are mounted. A mountpoint is throwaway scratch
-// (the data is on the device; Finder names the volume from the NFS share), so
-// it lives under the per-user temp dir, $TMPDIR (/var/folders/.../T on macOS).
-// If $TMPDIR resolves to a location that refuses user NFS mounts (e.g. the
-// shared /private/tmp), the mount simply fails and is reported — no fallback.
-func mountBase() string {
-	return filepath.Join(os.TempDir(), "lrmount")
-}
-
-// mountAt mounts the NFS server on port as deviceName and returns the
-// mountpoint. A live leftover mount at the path gets a numeric suffix so two
-// volumes never share a dir.
-func mountAt(deviceName string, port int) (string, error) {
-	mp, err := makeMountpoint(mountBase(), deviceName)
+// mountAt mounts the NFS server on port as deviceName, in a fresh dir under
+// base, and returns the mountpoint. The mountpoint is throwaway scratch (the
+// data is on the device; Finder names the volume from the NFS share).
+func mountAt(deviceName string, port int, base string) (string, error) {
+	mp, err := makeMountpoint(base, deviceName)
 	if err != nil {
 		return "", err
 	}
