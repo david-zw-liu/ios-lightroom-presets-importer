@@ -40,45 +40,39 @@ func hintPath(mountpoint, app, root, devicePath string) string {
 	return filepath.Join(mountpoint, app, rel)
 }
 
-// mountBases lists where to try mounting, in order. A mountpoint is throwaway
-// scratch (the data is on the device; Finder names the volume from the NFS
-// share), so we prefer the per-user temp dir. That is $TMPDIR
-// (/var/folders/.../T on macOS) — NOT the shared /private/tmp, which rejects
-// user NFS mounts from an unsigned binary with "Operation not permitted". A
-// hidden home directory is the fallback in case the temp mount is refused.
-func mountBases() []string {
-	var bases []string
-	if t := os.TempDir(); t != "" && t != "/tmp" && t != "/private/tmp" {
-		bases = append(bases, filepath.Join(t, "lrmount"))
+// mountBase is where volumes are mounted. A mountpoint is throwaway scratch
+// (the data is on the device; Finder names the volume from the NFS share), so
+// it lives under the per-user temp dir — $TMPDIR (/var/folders/.../T on
+// macOS), NOT the shared /private/tmp, which rejects user NFS mounts from an
+// unsigned binary with "Operation not permitted".
+func mountBase() string {
+	t := os.TempDir()
+	if t == "" || t == "/tmp" || t == "/private/tmp" {
+		t = "/var/tmp" // last resort; still per-user-writable and mountable
 	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		bases = append(bases, filepath.Join(home, ".lrmount"))
-	}
-	return bases
+	return filepath.Join(t, "lrmount")
 }
 
-// mountAt mounts the NFS server on port as deviceName, trying each base in
-// turn and returning the mountpoint that succeeded. A live leftover mount at
-// a candidate path gets a numeric suffix so two volumes never share a dir.
+// mountAt mounts the NFS server on port as deviceName and returns the
+// mountpoint. A live leftover mount at the path gets a numeric suffix so two
+// volumes never share a dir.
 func mountAt(deviceName string, port int) (string, error) {
-	var errs []string
-	for _, base := range mountBases() {
-		mp, err := makeMountpoint(base, deviceName)
-		if err != nil {
-			errs = append(errs, err.Error())
-			continue
-		}
-		if err := mountctl.MountNFS(mp, deviceName, port); err != nil {
-			mountctl.Cleanup(mp)
-			errs = append(errs, err.Error())
-			continue
-		}
-		return mp, nil
+	mp, err := makeMountpoint(mountBase(), deviceName)
+	if err != nil {
+		return "", err
 	}
-	return "", fmt.Errorf("could not mount %q: %s", deviceName, strings.Join(errs, "; "))
+	if err := mountctl.MountNFS(mp, deviceName, port); err != nil {
+		mountctl.Cleanup(mp)
+		return "", err
+	}
+	return mp, nil
 }
 
-// makeMountpoint creates an unused mount directory under base for deviceName.
+// makeMountpoint creates an unused mount directory under base for deviceName
+// and returns its canonical path. The path is resolved through symlinks here,
+// while it is still a plain directory, because the kernel mount table reports
+// real paths (e.g. /private/var, not the /var symlink) — comparing an
+// unresolved path against it would make a live mount look unmounted.
 func makeMountpoint(base, deviceName string) (string, error) {
 	for i := 1; i <= 9; i++ {
 		leaf := sanitizeSeg(deviceName)
@@ -86,11 +80,14 @@ func makeMountpoint(base, deviceName string) (string, error) {
 			leaf = fmt.Sprintf("%s %d", leaf, i)
 		}
 		mp := filepath.Join(base, leaf)
-		if mountctl.IsMounted(mp) {
-			continue
-		}
 		if err := os.MkdirAll(mp, 0o755); err != nil {
 			return "", err
+		}
+		if real, err := filepath.EvalSymlinks(mp); err == nil {
+			mp = real
+		}
+		if mountctl.IsMounted(mp) {
+			continue
 		}
 		return mp, nil
 	}
