@@ -212,17 +212,11 @@ func mountDevice(sessions []*device.Session, deviceName string) []*volume {
 		}
 	}()
 
-	mp, err := mountpointFor(deviceName)
+	port := ln.Addr().(*net.TCPAddr).Port
+	mp, err := mountAt(deviceName, port)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		ln.Close()
-		return nil
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	if err := mountctl.MountNFS(mp, deviceName, port); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		ln.Close()
-		mountctl.Cleanup(mp)
 		return nil
 	}
 

@@ -40,16 +40,46 @@ func hintPath(mountpoint, app, root, devicePath string) string {
 	return filepath.Join(mountpoint, app, rel)
 }
 
-// mountBase is where volumes are mounted. It lives under /tmp because a
-// mountpoint is throwaway scratch — the actual data is on the device, and the
-// Finder volume name comes from the NFS share, not this path.
-const mountBase = "/tmp/lrmount"
+// mountBases lists where to try mounting, in order. A mountpoint is throwaway
+// scratch (the data is on the device; Finder names the volume from the NFS
+// share), so we prefer the per-user temp dir. That is $TMPDIR
+// (/var/folders/.../T on macOS) — NOT the shared /private/tmp, which rejects
+// user NFS mounts from an unsigned binary with "Operation not permitted". A
+// hidden home directory is the fallback in case the temp mount is refused.
+func mountBases() []string {
+	var bases []string
+	if t := os.TempDir(); t != "" && t != "/tmp" && t != "/private/tmp" {
+		bases = append(bases, filepath.Join(t, "lrmount"))
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		bases = append(bases, filepath.Join(home, ".lrmount"))
+	}
+	return bases
+}
 
-// mountpointFor returns the mount directory /tmp/lrmount/{device}, creating
-// the parent hierarchy. A live mount already there (leftover from a prior
-// run) gets a numeric suffix so we never mount two volumes on one dir.
-func mountpointFor(deviceName string) (string, error) {
-	base := mountBase
+// mountAt mounts the NFS server on port as deviceName, trying each base in
+// turn and returning the mountpoint that succeeded. A live leftover mount at
+// a candidate path gets a numeric suffix so two volumes never share a dir.
+func mountAt(deviceName string, port int) (string, error) {
+	var errs []string
+	for _, base := range mountBases() {
+		mp, err := makeMountpoint(base, deviceName)
+		if err != nil {
+			errs = append(errs, err.Error())
+			continue
+		}
+		if err := mountctl.MountNFS(mp, deviceName, port); err != nil {
+			mountctl.Cleanup(mp)
+			errs = append(errs, err.Error())
+			continue
+		}
+		return mp, nil
+	}
+	return "", fmt.Errorf("could not mount %q: %s", deviceName, strings.Join(errs, "; "))
+}
+
+// makeMountpoint creates an unused mount directory under base for deviceName.
+func makeMountpoint(base, deviceName string) (string, error) {
 	for i := 1; i <= 9; i++ {
 		leaf := sanitizeSeg(deviceName)
 		if i > 1 {
