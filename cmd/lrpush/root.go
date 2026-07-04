@@ -1,26 +1,44 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"net"
+	"os"
+	"os/signal"
+	"sync"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/davidliu/lrpush/internal/device"
 	"github.com/davidliu/lrpush/internal/locate"
+	"github.com/davidliu/lrpush/internal/mountctl"
+	"github.com/davidliu/lrpush/internal/nfsgate"
 )
 
 // lightroomBundleIDs are probed in order; the iPhone app comes first.
 var lightroomBundleIDs = []string{"com.adobe.lrmobilephone", "com.adobe.lrmobile"}
 
 var rootCmd = &cobra.Command{
-	Use:           "lrpush",
-	Short:         "Mirror an iPhone/iPad Lightroom app's userStyles to ./sync and live-sync edits back",
+	Use:           "lrmount",
+	Short:         "Mount each iPhone/iPad Lightroom app's Documents as an ejectable Finder volume",
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE:          func(cmd *cobra.Command, args []string) error { return run() },
 }
 
 func Execute() error { return rootCmd.Execute() }
+
+type volume struct {
+	sess       *device.Session
+	name       string
+	root       string // Documents root on the device
+	hints      []string
+	mountpoint string
+	ln         net.Listener
+}
 
 func run() error {
 	// 1. Pick device.
@@ -44,7 +62,7 @@ func run() error {
 		chosen = infos[idx]
 	}
 
-	// 2. Detect every installed Lightroom app.
+	// 2. Open a session per installed Lightroom app.
 	sessions, err := device.DetectSessions(chosen.UDID, lightroomBundleIDs)
 	if err != nil {
 		return err
@@ -54,19 +72,127 @@ func run() error {
 			s.Close()
 		}
 	}()
+	multi := len(sessions) > 1
 
-	// 3. Per-app: report what would be mounted (mount flow lands next).
+	// 3. Build volume descriptions.
+	var vols []*volume
 	for _, s := range sessions {
 		docs, err := locate.DocumentsRoot(s.FS, "")
 		if err != nil {
-			return fmt.Errorf("[%s] %w", s.BundleID, err)
+			fmt.Fprintf(os.Stderr, "[%s] skipped: %v\n", s.BundleID, err)
+			continue
 		}
-		cands, err := locate.FindCatalogs(s.FS, docs)
-		if err != nil {
-			return fmt.Errorf("[%s] %w", s.BundleID, err)
+		v := &volume{sess: s, root: docs, name: volumeName(chosen.Name, s.BundleID, multi)}
+		if cands, err := locate.FindCatalogs(s.FS, docs); err == nil {
+			for _, c := range cands {
+				v.hints = append(v.hints, c.UserStyles)
+			}
 		}
-		fmt.Printf("[%s] Documents root %q, %d catalog(s)\n", s.BundleID, docs, len(cands))
+		vols = append(vols, v)
 	}
-	fmt.Println("NFS mount flow lands in a later commit on this branch.")
+	if len(vols) == 0 {
+		return fmt.Errorf("no Lightroom app with a usable Documents folder found")
+	}
+
+	fmt.Print(warningBanner())
+
+	// 4. Serve + mount every volume; failures skip that volume only.
+	var mounted []*volume
+	for _, v := range vols {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[%s] listen: %v\n", v.name, err)
+			continue
+		}
+		v.ln = ln
+		go func(v *volume) {
+			if err := nfsgate.Serve(v.ln, v.sess.FS, v.root); err != nil && !errors.Is(err, net.ErrClosed) {
+				fmt.Fprintf(os.Stderr, "[%s] nfs server: %v\n", v.name, err)
+			}
+		}(v)
+		mp, err := pickMountpoint(v.name)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[%s] %v\n", v.name, err)
+			ln.Close()
+			continue
+		}
+		port := ln.Addr().(*net.TCPAddr).Port
+		if err := mountctl.MountNFS(mp, port); err != nil {
+			fmt.Fprintf(os.Stderr, "[%s] %v\n", v.name, err)
+			ln.Close()
+			mountctl.Cleanup(mp)
+			continue
+		}
+		v.mountpoint = mp
+		mounted = append(mounted, v)
+		fmt.Printf("mounted  %s\n", mp)
+		for _, h := range v.hints {
+			fmt.Printf("  presets: %s\n", hintPath(mp, v.root, h))
+		}
+	}
+	if len(mounted) == 0 {
+		return fmt.Errorf("all volumes failed to mount")
+	}
+	fmt.Println("\nEject the volume(s) in Finder when done, or press Ctrl-C.")
+
+	// 5. Wait for ejects; Ctrl-C unmounts what is left.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	var wg sync.WaitGroup
+	for _, v := range mounted {
+		wg.Add(1)
+		go func(v *volume) {
+			defer wg.Done()
+			if err := mountctl.WaitUnmount(ctx, v.mountpoint); err != nil {
+				return // Ctrl-C: main unmounts below
+			}
+			fmt.Printf("ejected  %s\n", v.mountpoint)
+			v.ln.Close()
+			mountctl.Cleanup(v.mountpoint)
+		}(v)
+	}
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+
+	select {
+	case <-done: // every volume ejected in Finder
+	case <-ctx.Done(): // Ctrl-C
+		fmt.Println("\nunmounting…")
+		force := make(chan os.Signal, 1)
+		signal.Notify(force, os.Interrupt)
+		defer signal.Stop(force)
+		for _, v := range mounted {
+			unmountWithRetry(v, force)
+		}
+		wg.Wait()
+	}
+
+	fmt.Println("\nAll volumes ejected. Reopen Lightroom so it rebuilds its preset index.")
 	return nil
+}
+
+// unmountWithRetry keeps trying a graceful unmount (which flushes like a
+// Finder eject); a second Ctrl-C escalates to a forced unmount.
+func unmountWithRetry(v *volume, force <-chan os.Signal) {
+	defer func() {
+		v.ln.Close()
+		mountctl.Cleanup(v.mountpoint)
+	}()
+	for mountctl.IsMounted(v.mountpoint) {
+		err := mountctl.Unmount(v.mountpoint, false)
+		if err == nil {
+			fmt.Printf("ejected  %s\n", v.mountpoint)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "%s is busy — close open files, retrying in 2s (Ctrl-C again to force)\n", v.mountpoint)
+		select {
+		case <-force:
+			if err := mountctl.Unmount(v.mountpoint, true); err != nil {
+				fmt.Fprintf(os.Stderr, "force unmount %s: %v\n", v.mountpoint, err)
+			}
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
