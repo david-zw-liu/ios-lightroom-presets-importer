@@ -6,3 +6,6 @@
 
 # macOS
 .DS_Store
+
+# local preset mirror (personal presets — never commit)
+/sync/
