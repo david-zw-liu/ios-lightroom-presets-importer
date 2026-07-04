@@ -161,6 +161,7 @@ func run() error {
 			fmt.Printf("ejected  %s\n", v.mountpoint)
 			v.shutdown()
 		}(v)
+		go watchDevice(ctx, v)
 	}
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
@@ -180,6 +181,36 @@ func run() error {
 
 	fmt.Println("\nAll volumes ejected. Reopen Lightroom so it rebuilds its preset index.")
 	return nil
+}
+
+// watchDevice force-ejects the volume when its AFC connection dies (cable
+// unplugged, device rebooted). It probes the connection with a cheap
+// DeviceInfo round trip; any error is fatal because AFC sessions cannot
+// reconnect. The force unmount makes WaitUnmount return, which drives the
+// normal eject/shutdown path — when the last volume goes, the process exits.
+// Data still buffered by the NFS client at unplug time is lost; that is the
+// nature of pulling the cable, and a graceful flush is impossible with the
+// device gone.
+func watchDevice(ctx context.Context, v *volume) {
+	tick := time.NewTicker(2 * time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			if !mountctl.IsMounted(v.mountpoint) {
+				return // ejected normally
+			}
+			if _, _, err := v.sess.FS.DeviceInfo(); err != nil {
+				fmt.Fprintf(os.Stderr, "\n%s: device disconnected — force ejecting %s\n", v.name, v.mountpoint)
+				if err := mountctl.Unmount(v.mountpoint, true); err != nil {
+					fmt.Fprintf(os.Stderr, "force unmount %s: %v\n", v.mountpoint, err)
+				}
+				return
+			}
+		}
+	}
 }
 
 // unmountWithRetry keeps trying a graceful unmount (which flushes like a
