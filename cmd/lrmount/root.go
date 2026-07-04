@@ -66,7 +66,8 @@ func run() error {
 
 	fmt.Print(warningBanner())
 	fmt.Println("Mounting every USB-connected device (Wi-Fi devices are ignored).")
-	fmt.Println("Plug in a device and it mounts automatically; unplug to eject. Ctrl-C to quit.")
+	fmt.Println("Devices mount automatically. Eject in Finder to finish (unmounts all and quits);")
+	fmt.Println("unplugging a device ejects it but keeps lrmount running. Ctrl-C also quits.")
 
 	// Resident daemon keyed by udid. Each tick reconciles the mounted set
 	// against the USB devices usbmuxd reports.
@@ -91,7 +92,15 @@ func run() error {
 				present[d.UDID] = d
 			}
 			reconcileGone(mounts, warned, present)
-			reconcileEjected(mounts)
+			if reconcileEjected(mounts) {
+				// A Finder eject of a still-connected device means the user is
+				// done: unmount whatever is left and quit. (An unplug leaves
+				// the mount in the table and is handled by reconcileGone, so it
+				// stays resident instead.)
+				shutdownAll(mounts)
+				fmt.Println("\nDone. Reopen Lightroom so it rebuilds its preset index.")
+				return nil
+			}
 			reconcileNew(mounts, warned, present)
 		}
 	}
@@ -114,10 +123,11 @@ func reconcileGone(mounts map[string]*deviceMount, warned map[string]bool, prese
 	}
 }
 
-// reconcileEjected notices volumes the user ejected in Finder and tears down
-// their servers, keeping a marker so they are not remounted while the device
-// stays plugged in.
-func reconcileEjected(mounts map[string]*deviceMount) {
+// reconcileEjected tears down the server of any still-connected device whose
+// volume the user ejected in Finder, and reports whether that happened — the
+// caller treats a Finder eject as "done" and exits.
+func reconcileEjected(mounts map[string]*deviceMount) bool {
+	ejected := false
 	for _, dm := range mounts {
 		if dm.ejected || mountctl.IsMounted(dm.vol.mountpoint) {
 			continue
@@ -126,7 +136,9 @@ func reconcileEjected(mounts map[string]*deviceMount) {
 		dm.vol.shutdown()
 		closeSessions(dm.sessions)
 		dm.ejected = true
+		ejected = true
 	}
+	return ejected
 }
 
 // reconcileNew mounts any USB device not already tracked. Detection failures
@@ -162,16 +174,23 @@ func reconcileNew(mounts map[string]*deviceMount, warned map[string]bool, presen
 	}
 }
 
-// shutdownAll gracefully unmounts every mounted device on Ctrl-C; a second
-// Ctrl-C forces any that stay busy.
+// shutdownAll gracefully unmounts every still-mounted device (Ctrl-C, or the
+// remaining volumes after a Finder eject); a second Ctrl-C forces any that
+// stay busy. Already-ejected devices only have their sessions closed.
 func shutdownAll(mounts map[string]*deviceMount) {
-	if len(mounts) == 0 {
-		return
+	pending := false
+	for _, dm := range mounts {
+		if !dm.ejected {
+			pending = true
+			break
+		}
 	}
-	fmt.Println("\nunmounting…")
 	force := make(chan os.Signal, 1)
-	signal.Notify(force, os.Interrupt)
-	defer signal.Stop(force)
+	if pending {
+		fmt.Println("\nunmounting…")
+		signal.Notify(force, os.Interrupt)
+		defer signal.Stop(force)
+	}
 	for _, dm := range mounts {
 		if !dm.ejected {
 			unmountWithRetry(dm.vol, force)

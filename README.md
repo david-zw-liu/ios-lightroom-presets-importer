@@ -10,8 +10,10 @@ jailbreak, no kernel extensions, nothing to install.
 Running `lrmount`:
 
 1. Mounts every USB-connected device, no prompt; devices reachable only over
-   Wi-Fi are ignored. It runs as a resident daemon — plug in a device and it
-   mounts automatically, unplug and it ejects, until you press Ctrl-C.
+   Wi-Fi are ignored. It stays running: plug in a device and it mounts
+   automatically, unplug and it ejects that device but keeps running.
+   Ejecting a volume in Finder finishes — lrmount unmounts the rest and
+   quits (Ctrl-C also quits).
 2. Detects every installed Lightroom app on each device
    (`com.adobe.lrmobilephone`, then `com.adobe.lrmobile`) and serves them
    through one embedded NFS server, bridging NFS operations straight to the
@@ -52,9 +54,9 @@ flush.
 
 Every USB device mounts automatically. **Fully close Lightroom** on a device
 (swipe it away in the app switcher) while its volume is mounted, then edit
-presets in Finder under the printed paths. Eject a device's volume in Finder
-when you are done with it (and reopen Lightroom so it rebuilds its preset
-index); press Ctrl-C to quit lrmount.
+presets in Finder under the printed paths. Eject a volume in Finder when you
+are done — lrmount unmounts the rest and quits (Ctrl-C also quits). Reopen
+Lightroom afterward so it rebuilds its preset index.
 
 ### Safety
 
